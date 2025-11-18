@@ -1,0 +1,976 @@
+// Clinical Trial IRT/RTSM Database Schema
+// Comprehensive schema with vendor parity features
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// USER MANAGEMENT & AUTHENTICATION
+// ============================================================================
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  username      String   @unique
+  passwordHash  String
+  firstName     String
+  lastName      String
+  phone         String?
+  role          Role     @default(SITE_COORDINATOR)
+  status        UserStatus @default(ACTIVE)
+  lastLogin     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relationships
+  organization  Organization? @relation(fields: [organizationId], references: [id])
+  organizationId String?
+  sites         UserSite[]
+  studies       UserStudy[]
+  auditLogs     AuditLog[]
+  signatures    ElectronicSignature[]
+  sessions      UserSession[]
+
+  @@index([email])
+  @@index([organizationId])
+  @@map("users")
+}
+
+model UserSession {
+  id           String   @id @default(uuid())
+  userId       String
+  token        String   @unique
+  refreshToken String   @unique
+  ipAddress    String
+  userAgent    String
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@map("user_sessions")
+}
+
+enum Role {
+  SUPER_ADMIN
+  SPONSOR_ADMIN
+  CRO_ADMIN
+  STUDY_MANAGER
+  BIOSTATISTICIAN
+  PHARMACIST
+  SITE_COORDINATOR
+  INVESTIGATOR
+  DATA_MANAGER
+  MONITOR
+  AUDITOR
+  READONLY
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  LOCKED
+}
+
+// ============================================================================
+// ORGANIZATIONS
+// ============================================================================
+
+model Organization {
+  id          String   @id @default(uuid())
+  name        String
+  type        OrgType
+  description String?
+  country     String
+  address     String?
+  phone       String?
+  email       String?
+  status      OrgStatus @default(ACTIVE)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       User[]
+  studies     Study[]
+  sites       Site[]
+
+  @@map("organizations")
+}
+
+enum OrgType {
+  SPONSOR
+  CRO
+  SITE
+  VENDOR
+  DEPOT
+}
+
+enum OrgStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+// ============================================================================
+// CLINICAL STUDIES
+// ============================================================================
+
+model Study {
+  id                String   @id @default(uuid())
+  protocolNumber    String   @unique
+  title             String
+  description       String?
+  phase             StudyPhase
+  indication        String
+  sponsor           Organization @relation(fields: [sponsorId], references: [id])
+  sponsorId         String
+  status            StudyStatus @default(PLANNING)
+  blindingType      BlindingType
+  numberOfArms      Int
+  targetEnrollment  Int
+  startDate         DateTime?
+  endDate           DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Configuration
+  randomizationConfig Json? // Complex randomization parameters
+  supplyConfig        Json? // Supply chain configuration
+
+  // Relationships
+  sites             StudySite[]
+  arms              TreatmentArm[]
+  cohorts           Cohort[]
+  patients          Patient[]
+  inventory         Inventory[]
+  shipments         Shipment[]
+  randomizations    Randomization[]
+  users             UserStudy[]
+  amendments        ProtocolAmendment[]
+
+  @@index([sponsorId])
+  @@index([status])
+  @@map("studies")
+}
+
+enum StudyPhase {
+  PHASE_I
+  PHASE_II
+  PHASE_III
+  PHASE_IV
+  PILOT
+}
+
+enum StudyStatus {
+  PLANNING
+  STARTUP
+  ENROLLING
+  ACTIVE
+  COMPLETED
+  SUSPENDED
+  TERMINATED
+}
+
+enum BlindingType {
+  OPEN_LABEL
+  SINGLE_BLIND
+  DOUBLE_BLIND
+  TRIPLE_BLIND
+}
+
+model ProtocolAmendment {
+  id          String   @id @default(uuid())
+  studyId     String
+  version     String
+  description String
+  effectiveDate DateTime
+  createdAt   DateTime @default(now())
+
+  study Study @relation(fields: [studyId], references: [id])
+
+  @@index([studyId])
+  @@map("protocol_amendments")
+}
+
+model TreatmentArm {
+  id          String   @id @default(uuid())
+  studyId     String
+  name        String
+  code        String
+  description String?
+  isActive    Boolean  @default(true)
+
+  study       Study    @relation(fields: [studyId], references: [id])
+  patients    Patient[]
+  kits        InvestigationalProduct[]
+
+  @@unique([studyId, code])
+  @@map("treatment_arms")
+}
+
+// ============================================================================
+// SITES
+// ============================================================================
+
+model Site {
+  id            String   @id @default(uuid())
+  siteNumber    String   @unique
+  name          String
+  organization  Organization @relation(fields: [organizationId], references: [id])
+  organizationId String
+  country       String
+  region        String?
+  city          String
+  address       String
+  zipCode       String
+  phone         String
+  email         String
+  principalInvestigator String
+  status        SiteStatus @default(PENDING)
+  activationDate DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  studies       StudySite[]
+  users         UserSite[]
+  inventory     Inventory[]
+  shipments     ShipmentSite[]
+  patients      Patient[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@map("sites")
+}
+
+enum SiteStatus {
+  PENDING
+  ACTIVATED
+  ENROLLING
+  CLOSED_TO_ENROLLMENT
+  CLOSED
+  SUSPENDED
+}
+
+model StudySite {
+  id          String   @id @default(uuid())
+  studyId     String
+  siteId      String
+  targetEnrollment Int
+  activationDate DateTime?
+  closeDate   DateTime?
+  status      SiteStatus @default(PENDING)
+
+  study       Study    @relation(fields: [studyId], references: [id])
+  site        Site     @relation(fields: [siteId], references: [id])
+
+  @@unique([studyId, siteId])
+  @@map("study_sites")
+}
+
+model UserSite {
+  userId String
+  siteId String
+
+  user   User @relation(fields: [userId], references: [id])
+  site   Site @relation(fields: [siteId], references: [id])
+
+  @@id([userId, siteId])
+  @@map("user_sites")
+}
+
+model UserStudy {
+  userId  String
+  studyId String
+
+  user    User  @relation(fields: [userId], references: [id])
+  study   Study @relation(fields: [studyId], references: [id])
+
+  @@id([userId, studyId])
+  @@map("user_studies")
+}
+
+// ============================================================================
+// PATIENTS & COHORTS
+// ============================================================================
+
+model Patient {
+  id              String   @id @default(uuid())
+  studyId         String
+  siteId          String
+  patientNumber   String   @unique
+  screeningNumber String?  @unique
+  initials        String
+  dateOfBirth     DateTime
+  gender          Gender
+  ethnicity       String?
+
+  // Study specific
+  enrollmentDate  DateTime?
+  randomizationDate DateTime?
+  completionDate  DateTime?
+  status          PatientStatus @default(SCREENING)
+
+  // Stratification factors (stored as JSON for flexibility)
+  stratificationFactors Json?
+
+  // Direct-to-patient delivery
+  homeAddress     String?
+  homeCity        String?
+  homeZipCode     String?
+  homeCountry     String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  study           Study    @relation(fields: [studyId], references: [id])
+  site            Site     @relation(fields: [siteId], references: [id])
+  cohort          Cohort?  @relation(fields: [cohortId], references: [id])
+  cohortId        String?
+  randomization   Randomization?
+  treatmentArm    TreatmentArm? @relation(fields: [treatmentArmId], references: [id])
+  treatmentArmId  String?
+  visits          PatientVisit[]
+  dispensations   Dispensation[]
+  unblindingEvents UnblindingEvent[]
+
+  @@index([studyId])
+  @@index([siteId])
+  @@index([status])
+  @@map("patients")
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  UNKNOWN
+}
+
+enum PatientStatus {
+  SCREENING
+  SCREEN_FAILED
+  ENROLLED
+  RANDOMIZED
+  ACTIVE
+  COMPLETED
+  WITHDRAWN
+  DISCONTINUED
+  LOST_TO_FOLLOWUP
+}
+
+model Cohort {
+  id          String   @id @default(uuid())
+  studyId     String
+  name        String
+  description String?
+  maxSize     Int?
+  currentSize Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  study       Study    @relation(fields: [studyId], references: [id])
+  patients    Patient[]
+
+  @@index([studyId])
+  @@map("cohorts")
+}
+
+model PatientVisit {
+  id          String   @id @default(uuid())
+  patientId   String
+  visitNumber Int
+  visitDate   DateTime
+  visitType   String
+  notes       String?
+
+  patient     Patient  @relation(fields: [patientId], references: [id])
+  dispensations Dispensation[]
+
+  @@index([patientId])
+  @@map("patient_visits")
+}
+
+// ============================================================================
+// RANDOMIZATION ENGINE
+// ============================================================================
+
+model Randomization {
+  id                String   @id @default(uuid())
+  studyId           String
+  patientId         String   @unique
+  randomizationNumber String @unique
+  treatmentArmCode  String
+  stratumCode       String?
+  blockNumber       Int?
+  randomizationDate DateTime @default(now())
+  algorithm         RandomizationAlgorithm
+
+  // For adaptive randomization
+  adaptiveParameters Json?
+
+  // Metadata
+  performedBy       String
+  verifiedBy        String?
+  verificationDate  DateTime?
+
+  study             Study    @relation(fields: [studyId], references: [id])
+  patient           Patient  @relation(fields: [patientId], references: [id])
+
+  @@index([studyId])
+  @@index([randomizationNumber])
+  @@map("randomizations")
+}
+
+enum RandomizationAlgorithm {
+  SIMPLE
+  BLOCK
+  STRATIFIED_BLOCK
+  MINIMIZATION
+  RESPONSE_ADAPTIVE
+  BIASED_COIN
+  PERMUTED_BLOCK
+}
+
+model RandomizationList {
+  id          String   @id @default(uuid())
+  studyId     String
+  version     String
+  algorithm   RandomizationAlgorithm
+  blockSize   Int?
+  allocationRatio String // e.g., "1:1", "2:1"
+  stratificationFactors Json?
+  randomizationSequence Json // Encrypted sequence
+  generatedDate DateTime @default(now())
+  generatedBy String
+  approvedBy  String?
+  approvalDate DateTime?
+  isActive    Boolean  @default(false)
+
+  @@index([studyId])
+  @@map("randomization_lists")
+}
+
+// ============================================================================
+// BLINDING & UNBLINDING
+// ============================================================================
+
+model UnblindingEvent {
+  id          String   @id @default(uuid())
+  patientId   String
+  reason      UnblindingReason
+  requestedBy String
+  approvedBy  String?
+  requestDate DateTime @default(now())
+  approvalDate DateTime?
+  unblinedData Json    // What was unblinded
+  notes       String?
+
+  patient     Patient  @relation(fields: [patientId], references: [id])
+
+  @@index([patientId])
+  @@map("unblinding_events")
+}
+
+enum UnblindingReason {
+  EMERGENCY_MEDICAL
+  SAFETY_EVENT
+  DATA_ANALYSIS
+  REGULATORY_REQUEST
+  PROTOCOL_DEVIATION
+}
+
+// ============================================================================
+// INVESTIGATIONAL PRODUCTS & INVENTORY
+// ============================================================================
+
+model InvestigationalProduct {
+  id              String   @id @default(uuid())
+  name            String
+  code            String   @unique
+  treatmentArmId  String?
+  description     String?
+  dosageForm      String
+  strength        String
+  packagingType   String
+  unitsPerKit     Int
+  storageConditions String
+  shelfLifeDays   Int
+  requiresRefrigeration Boolean @default(false)
+  minTemp         Float?
+  maxTemp         Float?
+
+  treatmentArm    TreatmentArm? @relation(fields: [treatmentArmId], references: [id])
+  kits            Kit[]
+
+  @@map("investigational_products")
+}
+
+model Kit {
+  id              String   @id @default(uuid())
+  kitNumber       String   @unique
+  productId       String
+  batchNumber     String
+  expiryDate      DateTime
+  manufacturingDate DateTime
+  status          KitStatus @default(MANUFACTURED)
+
+  // Labeling
+  labelType       LabelType
+  labeledDate     DateTime?
+  labelData       Json? // For JIT labeling
+
+  product         InvestigationalProduct @relation(fields: [productId], references: [id])
+  inventory       Inventory[]
+  dispensations   Dispensation[]
+  temperatureRecords TemperatureRecord[]
+
+  @@index([kitNumber])
+  @@index([status])
+  @@map("kits")
+}
+
+enum KitStatus {
+  MANUFACTURED
+  LABELED
+  QUARANTINE
+  AVAILABLE
+  ALLOCATED
+  DISPENSED
+  RETURNED
+  EXPIRED
+  DESTROYED
+  ON_HOLD
+}
+
+enum LabelType {
+  PRE_LABELED
+  JUST_IN_TIME
+  DYNAMIC
+}
+
+model Inventory {
+  id          String   @id @default(uuid())
+  studyId     String
+  siteId      String?
+  depotId     String?
+  kitId       String
+  quantity    Int      @default(1)
+  location    String
+  status      InventoryStatus @default(AVAILABLE)
+  receivedDate DateTime?
+  allocatedDate DateTime?
+
+  study       Study    @relation(fields: [studyId], references: [id])
+  site        Site?    @relation(fields: [siteId], references: [id])
+  depot       Depot?   @relation(fields: [depotId], references: [id])
+  kit         Kit      @relation(fields: [kitId], references: [id])
+
+  @@index([studyId])
+  @@index([siteId])
+  @@index([kitId])
+  @@index([status])
+  @@map("inventory")
+}
+
+enum InventoryStatus {
+  AVAILABLE
+  ALLOCATED
+  RESERVED
+  QUARANTINE
+  EXPIRED
+  DESTROYED
+}
+
+model Depot {
+  id          String   @id @default(uuid())
+  name        String
+  country     String
+  region      String?
+  address     String
+  type        DepotType
+  status      DepotStatus @default(ACTIVE)
+
+  inventory   Inventory[]
+  shipmentsFrom Shipment[] @relation("ShipmentFromDepot")
+  shipmentsTo   Shipment[] @relation("ShipmentToDepot")
+
+  @@map("depots")
+}
+
+enum DepotType {
+  CENTRAL
+  REGIONAL
+  LOCAL
+}
+
+enum DepotStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+// ============================================================================
+// SUPPLY CHAIN & LOGISTICS
+// ============================================================================
+
+model Shipment {
+  id              String   @id @default(uuid())
+  studyId         String
+  shipmentNumber  String   @unique
+  trackingNumber  String?
+  carrier         String
+
+  // From/To
+  fromDepotId     String?
+  toDepotId       String?
+
+  status          ShipmentStatus @default(PREPARING)
+  shipDate        DateTime?
+  estimatedDeliveryDate DateTime?
+  actualDeliveryDate DateTime?
+
+  // Packaging details
+  packageType     String
+  numberOfPackages Int
+  weight          Float?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  study           Study    @relation(fields: [studyId], references: [id])
+  fromDepot       Depot?   @relation("ShipmentFromDepot", fields: [fromDepotId], references: [id])
+  toDepot         Depot?   @relation("ShipmentToDepot", fields: [toDepotId], references: [id])
+  sites           ShipmentSite[]
+  items           ShipmentItem[]
+  trackingEvents  ShipmentTracking[]
+
+  @@index([studyId])
+  @@index([shipmentNumber])
+  @@map("shipments")
+}
+
+enum ShipmentStatus {
+  PREPARING
+  READY_TO_SHIP
+  IN_TRANSIT
+  DELIVERED
+  DELAYED
+  RETURNED
+  LOST
+  DAMAGED
+}
+
+model ShipmentSite {
+  shipmentId String
+  siteId     String
+
+  shipment   Shipment @relation(fields: [shipmentId], references: [id])
+  site       Site     @relation(fields: [siteId], references: [id])
+
+  @@id([shipmentId, siteId])
+  @@map("shipment_sites")
+}
+
+model ShipmentItem {
+  id         String   @id @default(uuid())
+  shipmentId String
+  kitNumber  String
+  quantity   Int
+
+  shipment   Shipment @relation(fields: [shipmentId], references: [id])
+
+  @@index([shipmentId])
+  @@map("shipment_items")
+}
+
+model ShipmentTracking {
+  id          String   @id @default(uuid())
+  shipmentId  String
+  location    String
+  status      String
+  timestamp   DateTime
+  notes       String?
+
+  shipment    Shipment @relation(fields: [shipmentId], references: [id])
+
+  @@index([shipmentId])
+  @@map("shipment_tracking")
+}
+
+// ============================================================================
+// DISPENSATION
+// ============================================================================
+
+model Dispensation {
+  id          String   @id @default(uuid())
+  patientId   String
+  visitId     String
+  kitId       String
+  dispensedDate DateTime @default(now())
+  dispensedBy String
+  returnDate  DateTime?
+  returnedBy  String?
+  status      DispensationStatus @default(DISPENSED)
+  notes       String?
+
+  patient     Patient  @relation(fields: [patientId], references: [id])
+  visit       PatientVisit @relation(fields: [visitId], references: [id])
+  kit         Kit      @relation(fields: [kitId], references: [id])
+
+  @@index([patientId])
+  @@index([kitId])
+  @@map("dispensations")
+}
+
+enum DispensationStatus {
+  DISPENSED
+  RETURNED
+  PARTIALLY_RETURNED
+  DESTROYED
+  LOST
+}
+
+// ============================================================================
+// TEMPERATURE MONITORING
+// ============================================================================
+
+model TemperatureRecord {
+  id          String   @id @default(uuid())
+  kitId       String
+  temperature Float
+  humidity    Float?
+  timestamp   DateTime @default(now())
+  deviceId    String
+  location    String
+  isExcursion Boolean  @default(false)
+
+  kit         Kit      @relation(fields: [kitId], references: [id])
+  excursions  TemperatureExcursion[]
+
+  @@index([kitId])
+  @@index([timestamp])
+  @@map("temperature_records")
+}
+
+model TemperatureExcursion {
+  id          String   @id @default(uuid())
+  recordId    String
+  severity    ExcursionSeverity
+  startTime   DateTime
+  endTime     DateTime?
+  minTemp     Float
+  maxTemp     Float
+  duration    Int? // minutes
+  resolution  ExcursionResolution?
+  notes       String?
+
+  record      TemperatureRecord @relation(fields: [recordId], references: [id])
+
+  @@index([recordId])
+  @@map("temperature_excursions")
+}
+
+enum ExcursionSeverity {
+  MINOR
+  MODERATE
+  MAJOR
+  CRITICAL
+}
+
+enum ExcursionResolution {
+  PRODUCT_VIABLE
+  PRODUCT_QUARANTINE
+  PRODUCT_DESTROYED
+  UNDER_REVIEW
+}
+
+// ============================================================================
+// SUPPLY FORECASTING & ANALYTICS
+// ============================================================================
+
+model SupplyForecast {
+  id          String   @id @default(uuid())
+  studyId     String
+  forecastDate DateTime
+  algorithm   ForecastAlgorithm
+  predictions Json // Predicted demand by site/depot
+  confidence  Float
+  createdAt   DateTime @default(now())
+
+  @@index([studyId])
+  @@map("supply_forecasts")
+}
+
+enum ForecastAlgorithm {
+  LINEAR_REGRESSION
+  ARIMA
+  NEURAL_NETWORK
+  ENSEMBLE
+}
+
+model DrugPool {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  studies     Json // Array of study IDs participating
+  totalQuantity Int
+  allocatedQuantity Int
+  availableQuantity Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("drug_pools")
+}
+
+// ============================================================================
+// INTEGRATIONS
+// ============================================================================
+
+model Integration {
+  id          String   @id @default(uuid())
+  name        String
+  type        IntegrationType
+  vendor      String
+  configuration Json
+  status      IntegrationStatus @default(INACTIVE)
+  lastSync    DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  logs        IntegrationLog[]
+
+  @@map("integrations")
+}
+
+enum IntegrationType {
+  EDC
+  CTMS
+  ETMF
+  SUPPLY_VENDOR
+  LOGISTICS_PROVIDER
+  LAB_SYSTEM
+  SAFETY_DATABASE
+}
+
+enum IntegrationStatus {
+  ACTIVE
+  INACTIVE
+  ERROR
+  SUSPENDED
+}
+
+model IntegrationLog {
+  id            String   @id @default(uuid())
+  integrationId String
+  operation     String
+  direction     String // inbound/outbound
+  payload       Json?
+  response      Json?
+  status        String
+  errorMessage  String?
+  timestamp     DateTime @default(now())
+
+  integration   Integration @relation(fields: [integrationId], references: [id])
+
+  @@index([integrationId])
+  @@index([timestamp])
+  @@map("integration_logs")
+}
+
+// ============================================================================
+// AUDIT & COMPLIANCE
+// ============================================================================
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String
+  action      String
+  entity      String
+  entityId    String
+  changes     Json?
+  ipAddress   String
+  userAgent   String
+  timestamp   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([entity, entityId])
+  @@index([timestamp])
+  @@map("audit_logs")
+}
+
+model ElectronicSignature {
+  id          String   @id @default(uuid())
+  userId      String
+  documentType String
+  documentId  String
+  reason      String
+  timestamp   DateTime @default(now())
+  signatureHash String
+
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([documentType, documentId])
+  @@map("electronic_signatures")
+}
+
+// ============================================================================
+// NOTIFICATIONS
+// ============================================================================
+
+model Notification {
+  id          String   @id @default(uuid())
+  recipientId String
+  type        NotificationType
+  channel     NotificationChannel
+  subject     String
+  message     String
+  data        Json?
+  status      NotificationStatus @default(PENDING)
+  sentAt      DateTime?
+  readAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([recipientId])
+  @@index([status])
+  @@map("notifications")
+}
+
+enum NotificationType {
+  ENROLLMENT_ALERT
+  SUPPLY_LOW
+  SUPPLY_CRITICAL
+  SHIPMENT_DELAYED
+  TEMPERATURE_EXCURSION
+  KIT_EXPIRING
+  RANDOMIZATION_SUCCESS
+  UNBLINDING_REQUEST
+  SYSTEM_ALERT
+  PROTOCOL_AMENDMENT
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  IN_APP
+  PUSH
+  IVR
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  DELIVERED
+  FAILED
+  READ
+}
