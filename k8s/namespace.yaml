@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: irt-rtsm
+  labels:
+    name: irt-rtsm
+    environment: production
